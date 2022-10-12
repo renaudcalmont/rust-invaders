@@ -1,77 +1,50 @@
-use self::formation::{Formation, FormationMaker};
-use crate::components::{Enemy, FromEnemy, Laser, Movable, SpriteSize, Velocity};
-use crate::{
-	EnemyCount, GameTextures, WinSize, ENEMY_LASER_SIZE, ENEMY_MAX, ENEMY_SIZE, SPRITE_SCALE,
-	TIME_STEP,
-};
-use bevy::ecs::schedule::ShouldRun;
 use bevy::prelude::*;
-use bevy::time::FixedTimestep;
-use rand::{thread_rng, Rng};
 use std::f32::consts::PI;
 
-mod formation;
+use super::components::*;
+use super::events::*;
+use super::resources::*;
+use crate::world::components::*;
+use crate::world::resources::*;
 
-pub struct EnemyPlugin;
-
-impl Plugin for EnemyPlugin {
-	fn build(&self, app: &mut App) {
-		app.insert_resource(FormationMaker::default())
-			.add_system_set(
-				SystemSet::new()
-					.with_run_criteria(FixedTimestep::step(1.))
-					.with_system(enemy_spawn_system),
-			)
-			.add_system_set(
-				SystemSet::new()
-					.with_run_criteria(enemy_fire_criteria)
-					.with_system(enemy_fire_system),
-			)
-			.add_system(enemy_movement_system);
-	}
-}
-
-fn enemy_spawn_system(
+pub(super) fn spawn_enemy(
 	mut commands: Commands,
-	game_textures: Res<GameTextures>,
+	assets: Res<EnemyAssets>,
 	mut enemy_count: ResMut<EnemyCount>,
 	mut formation_maker: ResMut<FormationMaker>,
-	win_size: Res<WinSize>,
+	mut windows: ResMut<Windows>,
 ) {
-	if enemy_count.0 < ENEMY_MAX {
+	if enemy_count.0 < super::ENEMY_MAX_COUNT {
+		let window = windows.get_primary_mut().unwrap();
+
 		// get formation and start x/y
-		let formation = formation_maker.make(&win_size);
+		let formation = formation_maker.make(window.width(), window.height());
 		let (x, y) = formation.start;
 
 		commands
 			.spawn_bundle(SpriteBundle {
-				texture: game_textures.enemy.clone(),
+				texture: assets.enemy_image.clone(),
 				transform: Transform {
 					translation: Vec3::new(x, y, 10.),
-					scale: Vec3::new(SPRITE_SCALE, SPRITE_SCALE, 1.),
+					scale: SPRITE_SCALE,
 					..Default::default()
 				},
 				..Default::default()
 			})
+			.insert(Name::new("Enemy"))
 			.insert(Enemy)
 			.insert(formation)
-			.insert(SpriteSize::from(ENEMY_SIZE));
+			.insert(Hitable { hitbox: ENEMY_SIZE })
+			.insert(super::ENEMY_HEALTH);
 
 		enemy_count.0 += 1;
 	}
 }
 
-fn enemy_fire_criteria() -> ShouldRun {
-	if thread_rng().gen_bool(1. / 60.) {
-		ShouldRun::Yes
-	} else {
-		ShouldRun::No
-	}
-}
-
-fn enemy_fire_system(
+pub(super) fn enemy_fire(
 	mut commands: Commands,
-	game_textures: Res<GameTextures>,
+	assets: Res<EnemyAssets>,
+	audio: Res<Audio>,
 	enemy_query: Query<&Transform, With<Enemy>>,
 ) {
 	for &tf in enemy_query.iter() {
@@ -79,24 +52,27 @@ fn enemy_fire_system(
 		// spawn enemy laser sprite
 		commands
 			.spawn_bundle(SpriteBundle {
-				texture: game_textures.enemy_laser.clone(),
+				texture: assets.laser_image.clone(),
 				transform: Transform {
 					translation: Vec3::new(x, y - 15., 0.),
 					rotation: Quat::from_rotation_x(PI),
-					scale: Vec3::new(SPRITE_SCALE, SPRITE_SCALE, 1.),
+					scale: SPRITE_SCALE,
 					..Default::default()
 				},
 				..Default::default()
 			})
-			.insert(Laser)
-			.insert(SpriteSize::from(ENEMY_LASER_SIZE))
-			.insert(FromEnemy)
+			.insert(LaserFromEnemy)
+			.insert(Hitable { hitbox: LASER_SIZE })
 			.insert(Movable { auto_despawn: true })
-			.insert(Velocity { x: 0., y: -1. });
+			.insert(Velocity {
+				translation: Vec3::new(0., -1., 0.),
+				..Default::default()
+			});
+		audio.play(assets.laser_sound.clone());
 	}
 }
 
-fn enemy_movement_system(mut query: Query<(&mut Transform, &mut Formation), With<Enemy>>) {
+pub(super) fn enemy_move(mut query: Query<(&mut Transform, &mut Formation), With<Enemy>>) {
 	for (mut transform, mut formation) in query.iter_mut() {
 		// current position
 		let (x_org, y_org) = (transform.translation.x, transform.translation.y);
@@ -136,5 +112,47 @@ fn enemy_movement_system(mut query: Query<(&mut Transform, &mut Formation), With
 
 		let translation = &mut transform.translation;
 		(translation.x, translation.y) = (x, y);
+	}
+}
+
+pub(super) fn enemy_hit_listener(
+	mut commands: Commands,
+	mut enemy_query: Query<&mut Health, With<Enemy>>,
+	mut enemy_hit_reader: EventReader<EnemyHit>,
+	mut enemy_killed_writer: EventWriter<EnemyKilled>,
+	mut enemy_count: ResMut<EnemyCount>,
+) {
+	for event in enemy_hit_reader.iter() {
+		if let Ok(mut enemy_health) = enemy_query.get_mut(event.entity) {
+			enemy_health.level -= event.damage;
+			if enemy_health.level <= 0 {
+				commands.entity(event.entity).despawn();
+				enemy_killed_writer.send(EnemyKilled {
+					translation: event.translation.clone(),
+				});
+
+				enemy_count.0 -= 1;
+				return;
+			}
+
+			commands.entity(event.entity).insert(Highlight::default());
+		}
+	}
+}
+
+pub(super) fn highlight_animation(
+	mut commands: Commands,
+	time: Res<Time>,
+	mut query: Query<(Entity, &mut Highlight, &mut Sprite), With<Enemy>>,
+) {
+	for (entity, mut highlight, mut sprite) in query.iter_mut() {
+		highlight.timer.tick(time.delta());
+		sprite.color.set_g(0.);
+		sprite.color.set_b(0.);
+		if highlight.timer.finished() {
+			commands.entity(entity).remove::<Highlight>();
+			sprite.color.set_g(1.);
+			sprite.color.set_b(1.);
+		}
 	}
 }
