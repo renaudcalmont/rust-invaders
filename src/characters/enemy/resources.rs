@@ -1,4 +1,4 @@
-use crate::world::resources::BASE_SPEED;
+use crate::world::BASE_SPEED;
 use bevy::prelude::*;
 use rand::{thread_rng, Rng};
 

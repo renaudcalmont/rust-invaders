@@ -5,7 +5,7 @@ use super::components::*;
 use super::events::*;
 use super::resources::*;
 use crate::world::components::*;
-use crate::world::resources::*;
+use crate::world::*;
 
 pub(super) fn spawn_enemy(
 	mut commands: Commands,

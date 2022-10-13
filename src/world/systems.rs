@@ -1,5 +1,5 @@
 use super::components::{Movable, Velocity};
-use super::resources::{BASE_SPEED, TIME_STEP};
+use super::{BASE_SPEED, TIME_STEP};
 use bevy::prelude::*;
 
 pub(super) fn apply_movement(

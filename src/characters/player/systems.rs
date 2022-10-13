@@ -4,7 +4,7 @@ use super::components::*;
 use super::events::*;
 use super::resources::*;
 use crate::world::components::*;
-use crate::world::resources::SPRITE_SCALE;
+use crate::world::SPRITE_SCALE;
 
 pub fn spawn_camera(mut commands: Commands) {
 	commands.spawn_bundle(Camera2dBundle::default()).insert(Name::new("Camera"));
